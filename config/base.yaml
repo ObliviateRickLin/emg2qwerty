@@ -1,7 +1,7 @@
 defaults:
   - user: single_user
   - transforms: log_spectrogram
-  - model: tds_conv_ctc
+  - model: mamba_ctc
   - optimizer: adam
   - lr_scheduler: linear_warmup_cosine_annealing
   - decoder: ctc_greedy
@@ -9,7 +9,7 @@ defaults:
   - _self_
 
 seed: 1501
-batch_size: 32
+batch_size: 8  # 减小batch size以提高稳定性
 num_workers: 4  # Number of workers for dataloading
 train: True  # Whether to train or only run validation and test
 checkpoint: null  # Optional path to checkpoint file
@@ -22,6 +22,9 @@ trainer:
   num_nodes: 1
   max_epochs: 150
   default_root_dir: ${hydra:runtime.output_dir}
+  gradient_clip_val: 1.0  # 添加梯度裁剪
+  gradient_clip_algorithm: "norm"  # 使用L2范数裁剪
+  accumulate_grad_batches: 4  # 梯度累积，相当于batch_size=32
 
 callbacks:
   - _target_: pytorch_lightning.callbacks.LearningRateMonitor

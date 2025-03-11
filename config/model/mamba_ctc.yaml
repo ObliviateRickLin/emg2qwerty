@@ -1,0 +1,13 @@
+# @package _global_
+module:
+  _target_: emg2qwerty.lightning.MambaCTCModule
+  in_features: 528  # freq * channels = (n_fft // 2 + 1) * 16
+  mlp_features: [128]  # 减小特征维度，更适合序列建模
+  num_layers: 2  # 减少层数以降低复杂度
+  d_state: 32  # 增加状态维度以捕获更多时序信息
+  expansion_factor: 1  # 不进行特征扩展，保持维度稳定
+
+datamodule:
+  _target_: emg2qwerty.lightning.WindowedEMGDataModule
+  window_length: 8000  # 4 sec windows for 2kHz EMG
+  padding: [1800, 200]  # 900ms past context, 100ms future context 

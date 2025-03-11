@@ -278,3 +278,121 @@ class TDSConvEncoder(nn.Module):
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.tds_conv_blocks(inputs)  # (T, N, num_features)
+
+
+class SelectiveScanFn(nn.Module):
+    """Selective Scan Function - Mamba 的核心组件"""
+    def __init__(self, d_model, d_state):
+        super().__init__()
+        self.d_model = d_model
+        self.d_state = d_state
+        
+        # 使用更稳定的初始化
+        self.A = nn.Parameter(torch.randn(self.d_state).mul(0.02))
+        self.B = nn.Parameter(torch.randn(self.d_model, self.d_state).mul(0.02))
+        self.C = nn.Parameter(torch.randn(self.d_model, self.d_state).mul(0.02))
+        self.D = nn.Parameter(torch.zeros(self.d_model))  # 初始化为0
+        
+        # 添加LayerNorm
+        self.norm = nn.LayerNorm(d_model)
+        
+    def forward(self, u):
+        """
+        u: (L, B, H)
+        Returns: (L, B, H)
+        """
+        L, B, H = u.shape
+        
+        # 应用LayerNorm
+        u = self.norm(u)
+        
+        # 计算 ∆ 增量
+        dA = -torch.exp(self.A)  # 使用负指数确保稳定性
+        dB = self.B  
+        dC = self.C
+        
+        # 初始化状态
+        x = torch.zeros(B, H, self.d_state, device=u.device)
+        
+        outputs = []
+        for t in range(L):
+            # 更新状态
+            x = x * dA + u[t].unsqueeze(-1) * dB
+            # 计算输出
+            y = (x * dC).sum(-1) + u[t] * self.D
+            outputs.append(y)
+            
+        return torch.stack(outputs)
+
+class MambaBlock(nn.Module):
+    """Mamba 块 - 包含选择性扫描和前馈网络"""
+    def __init__(self, d_model, d_state=16, expansion_factor=2):
+        super().__init__()
+        
+        self.d_model = d_model
+        self.d_inner = int(expansion_factor * d_model)
+        
+        # 输入LayerNorm
+        self.norm1 = nn.LayerNorm(d_model)
+        
+        # 投影层
+        self.in_proj = nn.Sequential(
+            nn.Linear(d_model, self.d_inner),
+            nn.GELU()  # 添加激活函数
+        )
+        
+        # 选择性扫描
+        self.ssm = SelectiveScanFn(self.d_inner, d_state)
+        
+        # 输出投影
+        self.out_proj = nn.Sequential(
+            nn.Linear(self.d_inner, d_model),
+            nn.Dropout(0.1)  # 添加dropout
+        )
+        
+        # 输出LayerNorm
+        self.norm2 = nn.LayerNorm(d_model)
+        
+    def forward(self, x):
+        """
+        x: (T, N, d_model)
+        Returns: (T, N, d_model)
+        """
+        # 第一个残差分支
+        residual = x
+        x = self.norm1(x)
+        x = self.in_proj(x)
+        x = self.ssm(x)
+        x = self.out_proj(x)
+        x = residual + x
+        
+        # 第二个LayerNorm
+        x = self.norm2(x)
+        
+        return x
+
+class MambaEncoder(nn.Module):
+    """使用多个 Mamba 块的编码器"""
+    def __init__(
+        self,
+        num_features: int,
+        num_layers: int = 4,
+        d_state: int = 16,
+        expansion_factor: float = 2,
+    ) -> None:
+        super().__init__()
+        
+        self.layers = nn.ModuleList([
+            MambaBlock(
+                d_model=num_features,
+                d_state=d_state,
+                expansion_factor=expansion_factor
+            )
+            for _ in range(num_layers)
+        ])
+        
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        x = inputs
+        for layer in self.layers:
+            x = layer(x)
+        return x
